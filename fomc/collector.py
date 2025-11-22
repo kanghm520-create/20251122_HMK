@@ -7,6 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 import re
 from typing import Iterable, List, Optional
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -77,6 +78,37 @@ def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _extract_year_from_text(text: str) -> Optional[int]:
+    match = re.search(r"(20\d{2})", text)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _find_year_for_row(row: BeautifulSoup) -> Optional[int]:
+    for ancestor in row.parents:
+        candidate_sources = []
+        for attr in ("id", "data-year", "aria-labelledby"):
+            value = ancestor.get(attr)
+            if isinstance(value, str):
+                candidate_sources.append(value)
+        candidate_sources.append(ancestor.get_text(" ", strip=True))
+        for source in candidate_sources:
+            year = _extract_year_from_text(source)
+            if year:
+                return year
+    return None
+
+
+def _find_context_label(row: BeautifulSoup) -> Optional[str]:
+    heading = row.find_previous(["h2", "h3", "h4", "h5"])
+    if heading:
+        text = _normalize_whitespace(heading.get_text())
+        if text:
+            return text
+    return None
+
+
 def _parse_meeting_date(raw_text: str, year: int) -> date:
     cleaned = _normalize_whitespace(raw_text)
     cleaned = cleaned.split(":")[0]
@@ -98,6 +130,7 @@ def _extract_links(cell: BeautifulSoup) -> tuple[Optional[str], Optional[str]]:
         href = link.get("href")
         if not href:
             continue
+        href = urljoin(CALENDAR_URL, href)
         if "statement" in text:
             statement_url = href
         if "projection" in text:
@@ -111,39 +144,33 @@ def parse_calendar(html: str, max_years: int = DATE_RANGE_YEARS) -> List[Meeting
     min_year = current_year - max_years + 1
     meetings: List[MeetingDocuments] = []
 
-    for section in soup.find_all(["section", "div"], id=True):
+    for row in soup.find_all("tr"):
+        date_cell = row.find("th")
+        link_cell = row.find("td")
+        if date_cell is None or link_cell is None:
+            continue
+        year = _find_year_for_row(row)
+        if year is None or year < min_year:
+            continue
+        date_text = _normalize_whitespace(date_cell.get_text())
         try:
-            year = int(section.get("id"))
-        except (TypeError, ValueError):
+            meeting_date = _parse_meeting_date(date_text, year)
+        except ValueError:
             continue
-        if year < min_year:
-            continue
-        label_source = section.find(["h2", "h3", "h4", "h5"]) or section
-        default_label = _normalize_whitespace(label_source.get_text()) or f"FOMC {year}"
-        for row in section.find_all("tr"):
-            date_cell = row.find("th")
-            link_cell = row.find("td")
-            if date_cell is None or link_cell is None:
-                continue
-            date_text = _normalize_whitespace(date_cell.get_text())
-            try:
-                meeting_date = _parse_meeting_date(date_text, year)
-            except ValueError:
-                continue
-            statement_url, projection_url = _extract_links(link_cell)
-            label = default_label
-            description = _normalize_whitespace(link_cell.get_text())
-            if description:
-                label = description
-            meetings.append(
-                MeetingDocuments(
-                    meeting_date=meeting_date,
-                    label=label,
-                    statement_url=statement_url,
-                    projection_url=projection_url,
-                    source_url=CALENDAR_URL,
-                )
+        statement_url, projection_url = _extract_links(link_cell)
+        label = _find_context_label(row) or f"FOMC {year}"
+        description = _normalize_whitespace(link_cell.get_text())
+        if description:
+            label = description
+        meetings.append(
+            MeetingDocuments(
+                meeting_date=meeting_date,
+                label=label,
+                statement_url=statement_url,
+                projection_url=projection_url,
+                source_url=CALENDAR_URL,
             )
+        )
     meetings.sort(key=lambda m: m.meeting_date)
     return meetings
 
