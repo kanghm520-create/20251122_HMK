@@ -30,8 +30,12 @@ Downloaded files and logs are stored under `data/fomc_statements/` by default:
 After collecting data, start the FastAPI app (defaults to port 8000):
 
 ```bash
-uvicorn fomc.server:app --host 0.0.0.0 --port 8000
+python -m uvicorn fomc.server:app --host 0.0.0.0 --port 8000
 ```
+
+> **Note:** If the `uvicorn` command is not found, using `python -m uvicorn ...` ensures
+> the module is executed from the same Python environment where dependencies were
+> installed (including Codespaces, which installs packages into `~/.local`).
 
 Available endpoints:
 - `GET /` — Service metadata.
